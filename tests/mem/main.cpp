@@ -6,4 +6,7 @@ extern "C" {
         return (uint32_t)malloc(size);
     }
 
+    void free(uint32_t ptr) {
+        free((void*)ptr);
+    }
 }

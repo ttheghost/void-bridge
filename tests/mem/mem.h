@@ -163,3 +163,17 @@ void* malloc(usize_t size) {
     split(h, want);
     return (uint8_t*)h + sizeof(heap_header_t);
 }
+
+void free(void* p) {
+    if (!p) return;
+
+    heap_header_t* h = (heap_header_t*)((uint8_t*)p - sizeof(heap_header_t));
+    usize_t size = block_size(h);
+
+    // set_header(h, size);
+
+    heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + size - sizeof(heap_footer_t));
+    f->size = size;
+
+    bin_insert(bin_index(size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
+}
