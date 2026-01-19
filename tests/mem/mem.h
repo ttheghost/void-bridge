@@ -6,6 +6,7 @@
 #define NUM_BINS 32
 #define MIN_BLOCK 32
 #define INUSE 1
+#define PREV_INUSE 2
 
 typedef unsigned char uint8_t;
 typedef signed char int8_t;
@@ -32,6 +33,7 @@ typedef struct free_node
 } heap_free_node_t;
 
 extern uint8_t __heap_base;
+static usize_t heap_end;
 // For this test I am using Clang so I won't implement "wasm_memory_size" until the mem can do fondamentale task
 #define wasm_mem_size() __builtin_wasm_memory_size(0)
 static int vb_initialized = 0;
@@ -71,15 +73,27 @@ static usize_t block_size(heap_header_t* h) {
     return h->size_flags & ~(usize_t)0xF;
 }
 
-static void set_header(heap_header_t* h, usize_t size) {
-    h->size_flags = size;
+static void set_header(heap_header_t* h, usize_t size, int inuse, int prev) {
+    h->size_flags = size | (inuse ? INUSE : 0) | (prev ? PREV_INUSE : 0);
+}
+
+static int is_inuse(heap_header_t* h) {
+    return h->size_flags & INUSE;
+}
+
+static int is_prev_inuse(heap_header_t* h) {
+    return h->size_flags & PREV_INUSE;
 }
 
 static heap_header_t* next_block(heap_header_t* h) {
     return (heap_header_t*)((uint8_t*)h + block_size(h));
 }
 
-static heap_header_t* prev_block(heap_header_t* h);
+static heap_header_t* prev_block(heap_header_t* h) {
+    if (is_prev_inuse(h)) return 0;
+    heap_footer_t* f = (heap_footer_t*) ((uint8_t*)h - sizeof(heap_footer_t));
+    return (heap_header_t*)((uint8_t*)h - f->size);
+}
 
 static heap_header_t* find_block(usize_t want) {
     for (int b = bin_index(want); b < NUM_BINS; b++)
@@ -91,7 +105,7 @@ static heap_header_t* find_block(usize_t want) {
             if (block_size(h) >= want)
             {
                 bin_remove(b, n);
-                set_header(h, block_size(h));
+                set_header(h, block_size(h), 1, is_prev_inuse(h));
                 return h;
             }
             n = n->next;
@@ -105,10 +119,10 @@ static void split(heap_header_t* h, usize_t want) {
     if (size < want + MIN_BLOCK) return;
 
     usize_t remain = size - want;
-    set_header(h, want);
+    set_header(h, want, 1, is_prev_inuse(h));
 
     heap_header_t* r = (heap_header_t*)((uint8_t*)h + want);
-    set_header(r, remain);
+    set_header(r, remain, 0, 1);
     
     heap_footer_t* f = (heap_footer_t*)((uint8_t*)r + remain - sizeof(heap_footer_t));
     f->size = remain;
@@ -121,7 +135,7 @@ static void split(heap_header_t* h, usize_t want) {
 void init_heap() {
     usize_t heap_start = (usize_t)&__heap_base;
     usize_t current_pages = wasm_mem_size();
-    usize_t heap_end = current_pages * 64 * 1024; // WASM has usually 64KB per page
+    heap_end = current_pages * 64 * 1024; // WASM has usually 64KB per page
 
     usize_t start = align_up(heap_start);
 
@@ -132,7 +146,7 @@ void init_heap() {
     usize_t size = heap_end - start;
 
     heap_header_t* h = (heap_header_t*)start;
-    set_header(h, size);
+    set_header(h, size, 0, 1);
 
     heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + size - sizeof(heap_footer_t));
     f->size = size;
@@ -170,10 +184,33 @@ void free(void* p) {
     heap_header_t* h = (heap_header_t*)((uint8_t*)p - sizeof(heap_header_t));
     usize_t size = block_size(h);
 
-    // set_header(h, size);
+    heap_header_t* next = next_block(h);
+    if ((usize_t)next < heap_end && !is_inuse(next))
+    {
+        usize_t next_size = block_size(next);
+        heap_free_node_t* nn = (heap_free_node_t*) ((uint8_t*)next + sizeof(heap_header_t));
+        bin_remove(bin_index(next_size), nn);
+        size += next_size;
+    }
+
+    heap_header_t* prev = prev_block(h);
+    if (prev && !is_inuse(prev)) {
+        usize_t prev_size = block_size(prev);
+        heap_free_node_t* pn = (heap_free_node_t*)((uint8_t*)prev + sizeof(heap_header_t));
+        bin_remove(bin_index(prev_size), pn);
+        size += prev_size;
+        h = prev;
+    }
+
+    set_header(h, size, 0, is_prev_inuse(h));
 
     heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + size - sizeof(heap_footer_t));
     f->size = size;
+
+    heap_header_t* final_next = next_block(h);
+    if ((usize_t)final_next < heap_end) {
+        final_next->size_flags &= ~PREV_INUSE;
+    }
 
     bin_insert(bin_index(size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
 }
