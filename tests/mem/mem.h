@@ -189,9 +189,21 @@ static heap_header_t* grow_heap(usize_t want) {
 
     heap_header_t* h = (heap_header_t*)start_addr;
 
-    set_header(h, added_size, 0, 1);
+    heap_header_t* prev = prev_block(h);
+    if (prev && !is_inuse(prev))
+    {
+        usize_t prev_size = block_size(prev);
+        heap_free_node_t* pn = (heap_free_node_t*)((uint8_t*) prev + sizeof(heap_header_t));
+        bin_remove(bin_index(prev_size), pn);
+        added_size += prev_size;
+        h = prev;
+    }
+    
+    set_header(h, added_size, 0, is_prev_inuse(h));
+
     heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + added_size - sizeof(heap_footer_t));
     f->size = added_size;
+
     bin_insert(bin_index(added_size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
 
     return h;
@@ -220,6 +232,8 @@ void* malloc(usize_t size) {
     split(h, want);
     return (uint8_t*)h + sizeof(heap_header_t);
 }
+
+// void* realloc(void *p, usize_t size);
 
 void* calloc(usize_t n, usize_t size) {
     usize_t total = n * size;
