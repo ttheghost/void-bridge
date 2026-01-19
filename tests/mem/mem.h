@@ -7,6 +7,7 @@
 #define MIN_BLOCK 32
 #define INUSE 1
 #define PREV_INUSE 2
+#define FLAG_MASK 0xF
 
 typedef unsigned char uint8_t;
 typedef signed char int8_t;
@@ -70,7 +71,7 @@ static usize_t align_up(usize_t size) {
 }
 
 static usize_t block_size(heap_header_t* h) {
-    return h->size_flags & ~(usize_t)0xF;
+    return h->size_flags & ~(usize_t)FLAG_MASK;
 }
 
 static void set_header(heap_header_t* h, usize_t size, int inuse, int prev) {
@@ -106,6 +107,10 @@ static heap_header_t* find_block(usize_t want) {
             {
                 bin_remove(b, n);
                 set_header(h, block_size(h), 1, is_prev_inuse(h));
+                heap_header_t* n = next_block(h);
+                if ((usize_t)n < heap_end) {
+                    n->size_flags |= PREV_INUSE;
+                }
                 return h;
             }
             n = n->next;
@@ -165,7 +170,7 @@ void* malloc(usize_t size) {
         init_heap();
     }
 
-    usize_t want = align_up(size + sizeof(heap_header_t) + sizeof(heap_footer_t));
+    usize_t want = align_up(size + sizeof(heap_header_t));
     if (want < MIN_BLOCK) want = MIN_BLOCK;
     heap_header_t* h = find_block(want);
     if (!h)
