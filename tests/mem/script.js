@@ -1,10 +1,16 @@
 (async () => {
     const { instance } = await WebAssembly.instantiateStreaming(fetch("main.wasm"));
     console.log(instance.exports.memory); // So we can access the memory view UI
-    let p = instance.exports.alloc(600);
-    console.log(p);
-    console.log(instance.exports.alloc(63500));
-    instance.exports.free(p);
-    console.log(instance.exports.alloc(600));
-    console.log(instance.exports.alloc(220));
+
+    console.log("--- Running Allocator Tests ---");
+    const result = instance.exports.test_heap();
+
+    if (result === 0) {
+        console.log("SUCCESS: All heap sanity checks passed.");
+    } else {
+        console.error("FAILED: Error Code", result);
+        
+        if (result === 3) console.log("   -> Merging failed (Fragmentation detected)");
+        if (result === 2) console.log("   -> Data corruption (Memory overlap?)");
+    }
 })();
