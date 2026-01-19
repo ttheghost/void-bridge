@@ -32,26 +32,36 @@ typedef struct free_node
 } heap_free_node_t;
 
 extern uint8_t __heap_base;
+// For this test I am using Clang so I won't implement "wasm_memory_size" until the mem can do fondamentale task
+#define wasm_mem_size() __builtin_wasm_memory_size(0)
 static int vb_initialized = 0;
 static heap_free_node_t* bins[NUM_BINS];
 
-void* malloc(usize_t size) {
-    if (!size) return 0;
-
-    usize_t want = align_up(size + sizeof(heap_header_t) + sizeof(heap_footer_t));
-    if (want < MIN_BLOCK) want = MIN_BLOCK;
-    heap_header_t* h = find_block(want);
-    if (!h)
-    {
-        // Grow
-        return 0;
+// DLinked list helper
+static int bin_index(usize_t size) {
+    int i = 0;
+    size >>= 4;
+    while (size && i < NUM_BINS - 1) {
+        size >>= 1;
+        i++;
     }
-    
-    split(h, want);
-    return (uint8_t*)h + sizeof(heap_header_t);
+    return i;
 }
 
-// Helper
+static void bin_insert(int b, heap_free_node_t* n) {
+    n->prev = 0;
+    n->next = bins[b];
+    if (bins[b]) bins[b]->prev = n;
+    bins[b] = n;
+}
+
+static void bin_remove(int b, heap_free_node_t* n) {
+    if (n->prev) n->prev->next = n->next;
+    else bins[b] = n->next;
+    if (n->next) n->next->prev = n->prev;
+}
+
+// Helpers
 
 static usize_t align_up(usize_t size) {
     return (size + ALIGN_MASK) & ~ALIGN_MASK;
@@ -106,26 +116,50 @@ static void split(heap_header_t* h, usize_t want) {
     bin_insert(bin_index(remain), (heap_free_node_t*)((uint8_t*)r + sizeof(heap_header_t)));
 }
 
-// DLinked list helper
-static int bin_index(usize_t size) {
-    int i = 0;
-    size >>= 4;
-    while (size && i < NUM_BINS - 1) {
-        size >>= 1;
-        i++;
+// Init
+
+void init_heap() {
+    usize_t heap_start = (usize_t)&__heap_base;
+    usize_t current_pages = wasm_mem_size();
+    usize_t heap_end = current_pages * 64 * 1024; // WASM has usually 64KB per page
+
+    usize_t start = align_up(heap_start);
+
+    if (start + MIN_BLOCK + sizeof(heap_header_t) >= heap_end) {
+        return;
     }
-    return i;
+
+    usize_t size = heap_end - start;
+
+    heap_header_t* h = (heap_header_t*)start;
+    set_header(h, size);
+
+    heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + size - sizeof(heap_footer_t));
+    f->size = size;
+
+    bin_insert(bin_index(size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
+
+    vb_initialized = 1;
 }
 
-static void bin_insert(int b, heap_free_node_t* n) {
-    n->prev = 0;
-    n->next = bins[b];
-    if (bins[b]) bins[b]->prev = n;
-    bins[b] = n;
-}
+// malloc
 
-static void bin_remove(int b, heap_free_node_t* n) {
-    if (n->prev) n->prev->next = n->next;
-    else bins[b] = n->next;
-    if (n->next) n->next->prev = n->prev;
+void* malloc(usize_t size) {
+    if (!size) return 0;
+
+    if (!vb_initialized) {
+        init_heap();
+    }
+
+    usize_t want = align_up(size + sizeof(heap_header_t) + sizeof(heap_footer_t));
+    if (want < MIN_BLOCK) want = MIN_BLOCK;
+    heap_header_t* h = find_block(want);
+    if (!h)
+    {
+        // Grow
+        return 0;
+    }
+    
+    split(h, want);
+    return (uint8_t*)h + sizeof(heap_header_t);
 }
