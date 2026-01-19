@@ -120,19 +120,29 @@ static heap_header_t* find_block(usize_t want) {
 }
 
 static void split(heap_header_t* h, usize_t want) {
-    usize_t size = block_size(h);
-    if (size < want + MIN_BLOCK) return;
+    usize_t total_size = block_size(h);
+    int prev_status = is_prev_inuse(h);
 
-    usize_t remain = size - want;
-    set_header(h, want, 1, is_prev_inuse(h));
+    if (total_size >= want + MIN_BLOCK) {
+        usize_t remain = total_size - want;
+        set_header(h, want, 1, is_prev_inuse(h));
 
-    heap_header_t* r = (heap_header_t*)((uint8_t*)h + want);
-    set_header(r, remain, 0, 1);
+        heap_header_t* r = (heap_header_t*)((uint8_t*)h + want);
+        set_header(r, remain, 0, 1);
     
-    heap_footer_t* f = (heap_footer_t*)((uint8_t*)r + remain - sizeof(heap_footer_t));
-    f->size = remain;
+        heap_footer_t* f = (heap_footer_t*)((uint8_t*)r + remain - sizeof(heap_footer_t));
+        f->size = remain;
 
-    bin_insert(bin_index(remain), (heap_free_node_t*)((uint8_t*)r + sizeof(heap_header_t)));
+        bin_insert(bin_index(remain), (heap_free_node_t*)((uint8_t*)r + sizeof(heap_header_t)));
+    } else {
+        set_header(h, total_size, 1, prev_status);
+
+        heap_header_t* n = next_block(h);
+
+        if ((usize_t)n < heap_end) {
+            n->size_flags |= PREV_INUSE; 
+        }
+    }
 }
 
 // Init
