@@ -16,6 +16,7 @@ typedef signed short int16_t;
 typedef unsigned int uint32_t;
 typedef signed int int32_t;
 typedef unsigned long usize_t;
+#define PAGE_SIZE 65536
 
 typedef struct
 {
@@ -37,6 +38,7 @@ extern uint8_t __heap_base;
 static usize_t heap_end;
 // For this test I am using Clang so I won't implement "wasm_memory_size" until the mem can do fondamentale task
 #define wasm_mem_size() __builtin_wasm_memory_size(0)
+#define wasm_mem_grow(bytes) __builtin_wasm_memory_grow(0, bytes)
 static int vb_initialized = 0;
 static heap_free_node_t* bins[NUM_BINS];
 
@@ -150,7 +152,7 @@ static void split(heap_header_t* h, usize_t want) {
 void init_heap() {
     usize_t heap_start = (usize_t)&__heap_base;
     usize_t current_pages = wasm_mem_size();
-    heap_end = current_pages * 64 * 1024; // WASM has usually 64KB per page
+    heap_end = current_pages * PAGE_SIZE;
 
     usize_t start = align_up(heap_start);
 
@@ -171,6 +173,30 @@ void init_heap() {
     vb_initialized = 1;
 }
 
+static heap_header_t* grow_heap(usize_t want) {
+    // we assume want include the size of heap_header_t
+    usize_t req_size = want + MIN_BLOCK;
+
+    usize_t pages_needed = (req_size + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    usize_t old_pages = wasm_mem_grow(pages_needed);
+    if (old_pages == (usize_t)-1) return 0;
+
+    usize_t start_addr = old_pages * PAGE_SIZE;
+    usize_t added_size = pages_needed * PAGE_SIZE;
+    
+    heap_end += added_size;
+
+    heap_header_t* h = (heap_header_t*)start_addr;
+
+    set_header(h, added_size, 0, 1);
+    heap_footer_t* f = (heap_footer_t*)((uint8_t*)h + added_size - sizeof(heap_footer_t));
+    f->size = added_size;
+    bin_insert(bin_index(added_size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
+
+    return h;
+}
+
 // malloc
 
 void* malloc(usize_t size) {
@@ -185,8 +211,10 @@ void* malloc(usize_t size) {
     heap_header_t* h = find_block(want);
     if (!h)
     {
-        // Grow
-        return 0;
+        if (!grow_heap(want)) return 0;
+
+        h = find_block(want);
+        if (!h) return 0;
     }
     
     split(h, want);
