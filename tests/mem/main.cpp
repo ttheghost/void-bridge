@@ -45,6 +45,7 @@ int test_heap_impl() {
     void* last = malloc(MIN_BLOCK);
     free(last);
 
+    free(p1);
     return E_OK;
 }
 

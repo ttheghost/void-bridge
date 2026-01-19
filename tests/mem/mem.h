@@ -183,6 +183,27 @@ void* malloc(usize_t size) {
     return (uint8_t*)h + sizeof(heap_header_t);
 }
 
+void* calloc(usize_t n, usize_t size) {
+    usize_t total = n * size;
+    if (n && total / n != size) return 0;
+    
+    void* p = malloc(total);
+    if(!p) return 0;
+    
+    // We have 16 byte alignment, so we can optimize zeroing memory
+    usize_t* pu = (usize_t*)p;
+    
+    usize_t i = 0;
+    for (i = 0; i < total / sizeof(usize_t); i++) pu[i] = 0;
+
+    i = i * sizeof(usize_t);
+    for (; i < total; i++) {
+        ((uint8_t*)p)[i] = 0;
+    }
+
+    return p;
+}
+
 void free(void* p) {
     if (!p) return;
 
