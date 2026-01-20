@@ -34,6 +34,16 @@ typedef struct free_node
     struct free_node* prev;
 } heap_free_node_t;
 
+typedef struct {
+    usize_t total_heap_size;
+    usize_t used_bytes;
+    usize_t free_bytes;
+    usize_t total_blocks;
+    usize_t free_blocks;
+    usize_t largest_free_block;
+    usize_t fragmentation_percent; // 0 to 100
+} heap_report_t;
+
 extern uint8_t __heap_base;
 static usize_t heap_end;
 // For this test I am using Clang so I won't implement "wasm_memory_size" until the mem can do fondamentale task
@@ -41,6 +51,7 @@ static usize_t heap_end;
 #define wasm_mem_grow(bytes) __builtin_wasm_memory_grow(0, bytes)
 static int vb_initialized = 0;
 static heap_free_node_t* bins[NUM_BINS];
+static heap_report_t report;
 
 // DLinked list helper
 static int bin_index(usize_t size) {
@@ -379,4 +390,38 @@ void* realloc(void *p, usize_t n) {
     free(p);
 
     return new_p;
+}
+
+heap_report_t* intern_get_heap_report() {
+    if (!vb_initialized) init_heap();
+    
+    report.total_heap_size = heap_end;
+    report.used_bytes = 0;
+    report.free_bytes = 0;
+    report.total_blocks = 0;
+    report.free_blocks = 0;
+    report.largest_free_block = 0;
+
+    heap_header_t* h = (heap_header_t*)align_up((usize_t)&__heap_base);
+
+    while ((usize_t)h < heap_end) {
+        usize_t size = block_size(h);
+        if (size == 0) break; // Corrupt heap protection
+
+        report.total_blocks++;
+        if (is_inuse(h)) {
+            report.used_bytes += size;
+        } else {
+            report.free_bytes += size;
+            report.free_blocks++;
+            if (size > report.largest_free_block) report.largest_free_block = size;
+        }
+        h = next_block(h);
+    }
+    
+    report.fragmentation_percent = report.free_bytes > 0 
+        ? 100 - ((report.largest_free_block * 100) / report.free_bytes) 
+        : 0;
+
+    return &report;
 }
