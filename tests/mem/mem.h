@@ -50,6 +50,7 @@ static int bin_index(usize_t size) {
         size >>= 1;
         i++;
     }
+    if (i >= NUM_BINS - 1) return NUM_BINS - 1;
     return i;
 }
 
@@ -233,8 +234,6 @@ void* malloc(usize_t size) {
     return (uint8_t*)h + sizeof(heap_header_t);
 }
 
-// void* realloc(void *p, usize_t size);
-
 void* calloc(usize_t n, usize_t size) {
     usize_t total = n * size;
     if (n && total / n != size) return 0;
@@ -266,7 +265,7 @@ void free(void* p) {
     if ((usize_t)next < heap_end && !is_inuse(next))
     {
         usize_t next_size = block_size(next);
-        heap_free_node_t* nn = (heap_free_node_t*) ((uint8_t*)next + sizeof(heap_header_t));
+        heap_free_node_t* nn = (heap_free_node_t*)((uint8_t*)next + sizeof(heap_header_t));
         bin_remove(bin_index(next_size), nn);
         size += next_size;
     }
@@ -291,4 +290,90 @@ void free(void* p) {
     }
 
     bin_insert(bin_index(size), (heap_free_node_t*)((uint8_t*)h + sizeof(heap_header_t)));
+}
+
+void* realloc(void *p, usize_t n) {
+    if (!p) return malloc(n);
+
+    if (n == 0)
+    {
+        free(p);
+        return 0;
+    }
+    
+    heap_header_t* h = (heap_header_t*)((uint8_t*)p - sizeof(heap_header_t));
+    usize_t current_total_size = block_size(h);
+    usize_t want_total = align_up(n + sizeof(heap_header_t));
+
+    if (want_total < MIN_BLOCK) want_total = MIN_BLOCK;
+    
+
+    // Shrinking
+    if (current_total_size >= want_total + MIN_BLOCK)
+    {
+        usize_t remain = current_total_size - want_total;
+
+        set_header(h, want_total, 1, is_prev_inuse(h));
+
+        heap_header_t* r = (heap_header_t*)((uint8_t*)h + want_total);
+
+        // We will use free to merge it with the next next if fusable
+        // so we will mark it temporarily as in_use so free accept it safely
+        set_header(r, remain, 1, 1);
+
+        // free will merge, set the footer and add to bin
+        free((uint8_t*)r + sizeof(heap_header_t));
+
+        return p;
+    }
+
+    // Exact fit or tiny change (less than MIN_BLOCK)
+    if (current_total_size >= want_total)
+    {
+        return p;
+    }
+
+    // Growing
+    heap_header_t* next = next_block(h);
+
+    if ((usize_t)next < heap_end && !is_inuse(next))
+    {
+        usize_t next_size = block_size(next);
+        if (current_total_size + next_size >= want_total)
+        {
+            heap_free_node_t* nn = (heap_free_node_t*) ((uint8_t*)next + sizeof(heap_header_t));
+            bin_remove(bin_index(next_size), nn);
+
+            usize_t new_total = next_size + current_total_size;
+            set_header(h, new_total, 1, is_prev_inuse(h));
+
+            heap_header_t* next_next = next_block(h);
+            if ((usize_t)next_next < heap_end) {
+                next_next->size_flags |= PREV_INUSE;
+            }
+
+            // TODO: if the merged block is too big, we can call split.
+            return p;
+        }
+    }
+
+    // malloc - copy - free
+    void* new_p = malloc(n);
+    if (!new_p) return 0;
+    
+    usize_t* s = (usize_t*)p;
+    usize_t* d = (usize_t*)new_p;
+    usize_t current_payload = (current_total_size - sizeof(heap_header_t));
+    usize_t copy_len = (n < current_payload) ? n : current_payload;
+
+    usize_t words = copy_len / sizeof(usize_t);
+    for (usize_t i = 0; i < words; i++) d[i] = s[i];
+
+    uint8_t* s8 = (uint8_t*)p;
+    uint8_t* d8 = (uint8_t*)new_p;
+    for(usize_t i = words * sizeof(usize_t); i < copy_len; i++) d8[i] = s8[i];
+
+    free(p);
+
+    return new_p;
 }
