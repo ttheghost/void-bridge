@@ -50,7 +50,6 @@ static int bin_index(usize_t size) {
         size >>= 1;
         i++;
     }
-    if (i >= NUM_BINS - 1) return NUM_BINS - 1;
     return i;
 }
 
@@ -352,7 +351,11 @@ void* realloc(void *p, usize_t n) {
                 next_next->size_flags |= PREV_INUSE;
             }
 
-            // TODO: if the merged block is too big, we can call split.
+            if (new_total >= want_total + MIN_BLOCK)
+            {
+                split(h, want_total);
+            }
+
             return p;
         }
     }
